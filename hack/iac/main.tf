@@ -18,6 +18,13 @@ resource "google_project_service" "aiplatform" {
   disable_dependent_services = false
 }
 
+resource "google_project_service" "artifactregistry" {
+  project = var.project_id
+  service = "artifactregistry.googleapis.com"
+
+  disable_dependent_services = false
+}
+
 resource "google_project_service" "cloudresourcemanager" {
   project = var.project_id
   service = "cloudresourcemanager.googleapis.com"
