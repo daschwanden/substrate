@@ -255,6 +255,13 @@ resource "google_container_cluster" "substrate" {
 
   min_master_version = var.cluster_version 
 
+  enable_k8s_beta_apis {
+    enabled_apis = [
+      "certificates.k8s.io/v1beta1/podcertificaterequests",
+      "certificates.k8s.io/v1beta1/clustertrustbundles"
+    ]
+  }
+
   ip_allocation_policy {
     cluster_secondary_range_name  = "pod-range"
     services_secondary_range_name = google_compute_subnetwork.substrate_subnet.secondary_ip_range.0.range_name
