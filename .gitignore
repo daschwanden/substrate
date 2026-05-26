@@ -17,6 +17,7 @@ __pycache__/
 # Terraform config
 # Local .terraform directories
 hack/iac/.terraform/
+hack/iac/.terraform.*
 
 # .tfstate files
 *.tfstate
