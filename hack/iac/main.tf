@@ -188,9 +188,12 @@ resource "google_compute_router_nat" "substrate_router_nat" {
 ##########################################################################
 resource "google_artifact_registry_repository" "container_registry" {
   location      = var.region
-  repository_id = "containers"
+  repository_id = "ate-images"
   description   = "docker repository"
   format        = "DOCKER"
+  depends_on = [
+    google_project_service.artifactregistry
+  ]
 }
 
 resource "google_artifact_registry_repository_iam_member" "atelet_artifact_reader" {
@@ -214,7 +217,7 @@ resource "google_artifact_registry_repository_iam_member" "default_sa_artifact_r
 # Set up the Snapshot bucket
 ##########################################################################
 resource "google_storage_bucket" "snapshots" {
-  name          = "snapshots-${var.project_id}"
+  name          = "snapshot-substrate-test-${var.project_id}"
   location      = "US"
 
   force_destroy               = true
@@ -385,3 +388,58 @@ resource "google_project_iam_member" "cloud_trace" {
     google_container_cluster.substrate
   ]
 }
+
+###########################################################################
+# Enable Cloud Build API
+###########################################################################
+resource "google_project_service" "cloudbuild" {
+  project = var.project_id
+  service = "cloudbuild.googleapis.com"
+
+  disable_dependent_services = false
+}
+
+###########################################################################
+# Set up permissions for Cloud Build to deploy to GKE and push to AR
+###########################################################################
+resource "google_project_iam_member" "cloudbuild_gke_developer" {
+  project = var.project_id
+  role    = "roles/container.developer"
+  member  = "serviceAccount:${data.google_project.project.number}@cloudbuild.gserviceaccount.com"
+}
+
+resource "google_artifact_registry_repository_iam_member" "cloudbuild_ar_writer" {
+  location   = google_artifact_registry_repository.container_registry.location
+  repository = google_artifact_registry_repository.container_registry.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${data.google_project.project.number}@cloudbuild.gserviceaccount.com"
+}
+
+###########################################################################
+# Cloud Build Trigger for ATE Deployment
+###########################################################################
+resource "google_cloudbuild_trigger" "ate_deploy" {
+  name        = "ate-deploy-trigger"
+  description = "Trigger to deploy ATE system using cloudbuild.yaml"
+
+  filename = "hack/iac/cloudbuild.yaml"
+
+  substitutions = {
+    _CLUSTER_NAME     = var.cluster_name
+    _CLUSTER_LOCATION = var.zone
+    _REGISTRY_PATH    = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.container_registry.repository_id}"
+  }
+
+  github {
+    owner = var.placeholder_owner
+    name  = var.placeholder_repo
+    push {
+      branch = "\^${var.placeholder_branch}\$"
+    }
+  }
+
+  depends_on = [
+    google_project_service.cloudbuild
+  ]
+}
+

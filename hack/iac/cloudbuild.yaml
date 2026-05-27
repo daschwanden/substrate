@@ -1,0 +1,136 @@
+substitutions:
+  _CLUSTER_NAME: 'your-cluster-name'
+  _CLUSTER_LOCATION: 'your-cluster-location'
+  _REGISTRY_PATH: 'us-central1-docker.pkg.dev/your-project-id/substrate/ate'
+
+steps:
+  # 1. Get GKE credentials
+  - name: 'gcr.io/cloud-builders/gcloud'
+    env:
+      - 'KUBECONFIG=/workspace/.kubeconfig'
+    args:
+      - 'container'
+      - 'clusters'
+      - 'get-credentials'
+      - '${_CLUSTER_NAME}'
+      - '--location'
+      - '${_CLUSTER_LOCATION}'
+      - '--project'
+      - '$PROJECT_ID'
+
+  # 2. Deploy CRDs
+  # Uses ko to build and apply CRDs from manifests/ate-install/generated
+  - name: 'ghcr.io/ko-build/ko'
+    env:
+      - 'KUBECONFIG=/workspace/.kubeconfig'
+      - 'KO_DOCKER_REPO=${_REGISTRY_PATH}'
+    args: ['apply', '-f', 'manifests/ate-install/generated']
+
+  # 3. Create Namespace and Prerequisites
+  # We use a Go image because we need to run `go run ./cmd/kubectl-ate` to generate secrets.
+  # We also install kubectl in this step to manage secrets and namespaces.
+  - name: 'golang:1.22'
+    env:
+      - 'KUBECONFIG=/workspace/.kubeconfig'
+      - 'PROJECT_ID=$PROJECT_ID'
+      - 'CLUSTER_NAME=${_CLUSTER_NAME}'
+      - 'CLUSTER_LOCATION=${_CLUSTER_LOCATION}'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Install kubectl
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        mv kubectl /usr/local/bin/
+
+        # Create Namespace
+        kubectl apply -f manifests/ate-install/ate-system-namespace.yaml
+        kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+
+        # Create Secrets using kubectl-ate
+        go run ./cmd/kubectl-ate admin make-jwt-pool --key-id="1" --name="session-id-jwt-pool" --secret-namespace=ate-system
+        go run ./cmd/kubectl-ate admin make-ca-pool --ca-id="1" --name="session-id-ca-pool" --secret-namespace=ate-system
+        
+        kubectl create namespace podcertificate-controller-system || true
+        go run ./cmd/kubectl-ate admin make-ca-pool --ca-id="1" --name="service-dns-ca-pool" --secret-namespace=podcertificate-controller-system
+        go run ./cmd/kubectl-ate admin make-ca-pool --ca-id="1" --name="pod-identity-ca-pool" --secret-namespace=podcertificate-controller-system
+
+        # Create Valkey CA certs secret (requires openssl which is usually in the golang image)
+        pool_json=$(kubectl get secret -n podcertificate-controller-system service-dns-ca-pool -o jsonpath='{.data.pool}' | base64 --decode)
+        der_base64=$(echo "${pool_json}" | grep -o '"RootCertificateDER":"[^"]*' | sed 's/"RootCertificateDER":"//')
+        ca_certs=$(echo "${der_base64}" | base64 --decode | openssl x509 -inform der -outform pem)
+
+        kubectl create secret generic valkey-ca-certs \
+          --from-literal=ca.crt="${ca_certs}" \
+          -n ate-system \
+          --dry-run=client -o yaml \
+          | kubectl apply -f -
+
+        # Create API Server Env Vars
+        redis_address="valkey-cluster.ate-system.svc:6379"
+        use_iam_auth="false"
+        tls_server_name="valkey-cluster.ate-system.svc"
+        client_cert="/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+        
+        if [[ -n "${PROJECT_ID}" && -n "${CLUSTER_LOCATION}" && -n "${CLUSTER_NAME}" ]]; then
+          jwt_issuer="https://container.googleapis.com/v1/projects/${PROJECT_ID}/locations/${CLUSTER_LOCATION}/clusters/${CLUSTER_NAME}"
+        else
+          jwt_issuer="https://kubernetes.default.svc"
+        fi
+
+        kubectl create configmap -n ate-system ate-api-server-envvars \
+          --from-literal=ATE_API_REDIS_ADDRESS="${redis_address}" \
+          --from-literal=ATE_API_REDIS_USE_IAM_AUTH="${use_iam_auth}" \
+          --from-literal=ATE_API_REDIS_TLS_SERVER_NAME="${tls_server_name}" \
+          --from-literal=ATE_API_REDIS_CLIENT_CERT="${client_cert}" \
+          --from-literal=ATE_API_K8SJWT_ISSUER="${jwt_issuer}" \
+          --dry-run=client -o yaml \
+          | kubectl apply -f -
+
+  # 4. Deploy PodCertificate Controller
+  - name: 'ghcr.io/ko-build/ko'
+    env:
+      - 'KUBECONFIG=/workspace/.kubeconfig'
+      - 'KO_DOCKER_REPO=${_REGISTRY_PATH}'
+    args: ['apply', '-f', 'manifests/ate-install/pod-certificate-controller.yaml']
+
+  # 5. Wait for PodCertificate Controller and TrustBundles
+  - name: 'gcr.io/cloud-builders/kubectl'
+    env:
+      - 'KUBECONFIG=/workspace/.kubeconfig'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        kubectl rollout status deployment/podcertificate-controller -n podcertificate-controller-system --timeout=120s
+        
+        echo "Waiting for podcertificate ClusterTrustBundles to be ready..."
+        until kubectl get clustertrustbundles podidentity.podcert.ate.dev:identity:primary-bundle >/dev/null 2>&1; do
+          sleep 1
+        done
+        until kubectl get clustertrustbundles servicedns.podcert.ate.dev:identity:primary-bundle >/dev/null 2>&1; do
+          sleep 1
+        done
+
+  # 6. Deploy ATE System Components
+  # This builds and deploys the main system components.
+  - name: 'ghcr.io/ko-build/ko'
+    env:
+      - 'KUBECONFIG=/workspace/.kubeconfig'
+      - 'KO_DOCKER_REPO=${_REGISTRY_PATH}'
+    args: ['apply', '-f', 'manifests/ate-install']
+
+  # 7. Wait for components to be ready
+  - name: 'gcr.io/cloud-builders/kubectl'
+    env:
+      - 'KUBECONFIG=/workspace/.kubeconfig'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        kubectl rollout status deployment/ate-api-server-deployment -n ate-system --timeout=120s
+        kubectl rollout status deployment/ate-controller -n ate-system --timeout=120s
+        kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
+        kubectl rollout status statefulset/valkey-cluster -n ate-system --timeout=120s
+        kubectl rollout status daemonset/atelet -n ate-system --timeout=120s

@@ -67,3 +67,18 @@ variable "gvisor_pool_version" {
   description = "gvisor nodepool version" 
   default     = "1.35.0-gke.2398000"
 }
+
+variable "placeholder_owner" {
+  description = "Owner of the repo" 
+  default     = "agent-substrate"
+}
+
+variable "placeholder_name" {
+  description = "Name of the repo" 
+  default     = "substrate"
+}
+
+variable "placeholder_branch" {
+  description = "Name of the branch" 
+  default     = "feature/iac"
+}
