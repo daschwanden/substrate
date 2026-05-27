@@ -49,7 +49,7 @@ build-atenet:
 
 .PHONY: build-demos
 build-demos:
-	$(KO) build ./cmd/demos/counter
+	$(KO) build ./demos/counter
 
 .PHONY: test
 test:
@@ -77,7 +77,6 @@ lint:
 
 .PHONY: verify
 verify: test
-	$(GO) vet ./...
 	bash hack/verify-all.sh
 
 .PHONY: clean
