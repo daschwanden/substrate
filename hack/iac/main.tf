@@ -11,88 +11,26 @@ data "google_compute_default_service_account" "default" {
 ##########################################################################
 # Enable the required Cloud APIs
 ##########################################################################
-resource "google_project_service" "aiplatform" {
+resource "google_project_service" "services" {
+  for_each = toset([
+    "aiplatform.googleapis.com",
+    "artifactregistry.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "cloudbuild.googleapis.com",
+    "cloudtrace.googleapis.com",
+    "compute.googleapis.com",
+    "container.googleapis.com",
+    "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "logging.googleapis.com",
+    "monitoring.googleapis.com",
+    "serviceusage.googleapis.com",
+    "storage.googleapis.com",
+  ])
   project = var.project_id
-  service = "aiplatform.googleapis.com"
+  service = each.key
 
-  disable_dependent_services = false
-}
-
-resource "google_project_service" "artifactregistry" {
-  project = var.project_id
-  service = "artifactregistry.googleapis.com"
-
-  disable_dependent_services = false
-}
-
-resource "google_project_service" "cloudresourcemanager" {
-  project = var.project_id
-  service = "cloudresourcemanager.googleapis.com"
-
-  disable_dependent_services = false
-}
-
-resource "google_project_service" "cloudtrace" {
-  project = var.project_id
-  service = "cloudtrace.googleapis.com"
-
-  disable_dependent_services = false
-}
-
-resource "google_project_service" "container" {
-  project = var.project_id
-  service = "container.googleapis.com"
-
-  disable_dependent_services = false
-}
-
-resource "google_project_service" "compute" {
-  project = var.project_id
-  service = "compute.googleapis.com"
-
-  disable_dependent_services = false
-}
-
-resource "google_project_service" "iam" {
-  project = var.project_id
-  service = "iam.googleapis.com"
-
-  disable_dependent_services = false
-}
-
-resource "google_project_service" "iamcredentials" {
-  project = var.project_id
-  service = "iamcredentials.googleapis.com"
-
-  disable_dependent_services = false
-}
-
-resource "google_project_service" "logging" {
-  project = var.project_id
-  service = "logging.googleapis.com"
-
-  disable_dependent_services = false
-}
-
-resource "google_project_service" "monitoring" {
-  project = var.project_id
-  service = "monitoring.googleapis.com"
-
-  disable_dependent_services = false
-}
-
-resource "google_project_service" "serviceusage" {
-  project = var.project_id
-  service = "serviceusage.googleapis.com"
-
-  disable_dependent_services = false
-}
-
-resource "google_project_service" "storage" {
-  project = var.project_id
-  service = "storage.googleapis.com"
-
-  disable_dependent_services = false
+  disable_on_destroy = false
 }
 
 ##########################################################################
@@ -387,16 +325,6 @@ resource "google_project_iam_member" "cloud_trace" {
   depends_on = [
     google_container_cluster.substrate
   ]
-}
-
-###########################################################################
-# Enable Cloud Build API
-###########################################################################
-resource "google_project_service" "cloudbuild" {
-  project = var.project_id
-  service = "cloudbuild.googleapis.com"
-
-  disable_dependent_services = false
 }
 
 ###########################################################################
