@@ -73,7 +73,7 @@ variable "placeholder_owner" {
   default     = "agent-substrate"
 }
 
-variable "placeholder_name" {
+variable "placeholder_repo" {
   description = "Name of the repo" 
   default     = "substrate"
 }

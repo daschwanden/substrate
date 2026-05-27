@@ -130,7 +130,7 @@ resource "google_artifact_registry_repository" "container_registry" {
   description   = "docker repository"
   format        = "DOCKER"
   depends_on = [
-    google_project_service.artifactregistry
+    google_project_service.services["artifactregistry.googleapis.com"]
   ]
 }
 
@@ -362,12 +362,12 @@ resource "google_cloudbuild_trigger" "ate_deploy" {
     owner = var.placeholder_owner
     name  = var.placeholder_repo
     push {
-      branch = "\^${var.placeholder_branch}\$"
+      branch = "^${var.placeholder_branch}$"
     }
   }
 
   depends_on = [
-    google_project_service.cloudbuild
+    google_project_service.services["cloudbuild.googleapis.com"]
   ]
 }
 
