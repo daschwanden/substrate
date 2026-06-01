@@ -14,11 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -e
-set -u
-set -o pipefail
+set -o errexit -o nounset -o pipefail
 
-ROOT=$(git rev-parse --show-toplevel)
+ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
 # Source the environment variables if configured
@@ -104,9 +102,17 @@ run_kubectl_ate() {
 }
 
 run_ko() {
-  ./hack/run-tool.sh ko \
-    "$@" \
-    -- ${KUBECTL_CONTEXT:+--context=${KUBECTL_CONTEXT}}
+  # Only ko subcommands that delegate to kubectl (apply, create, delete, run)
+  # accept args after `--`. ko build, resolve, deps, login etc. reject
+  # `--context=...` as an unknown subcommand and abort the install.
+  case "${1:-}" in
+    apply|create|delete|run)
+      ./hack/run-tool.sh ko "$@" ${KUBECTL_CONTEXT:+-- --context="${KUBECTL_CONTEXT}"}
+      ;;
+    *)
+      ./hack/run-tool.sh ko "$@"
+      ;;
+  esac
 }
 
 create_valkey_ca_certs_secret() {

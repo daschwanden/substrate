@@ -1,16 +1,18 @@
-//  Copyright 2026 Google LLC
+//go:build linux
+
+// Copyright 2026 Google LLC
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package main
 
@@ -26,19 +28,17 @@ import (
 	"sync"
 
 	"cloud.google.com/go/compute/metadata"
+	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/hashicorp/go-reap"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -64,21 +64,22 @@ func do(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(os.Stdout, nil)))
+	syncedWriter := ateom.NewSyncedWriter(os.Stdout)
+	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, nil)))
 	slog.SetDefault(logger)
 
 	slog.InfoContext(ctx, "ateom booting")
 
-	tp, err := initTracing(ctx)
+	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
+		ServiceName: "ateom-gvisor",
+		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
+		// ateom has no network connectivity once eth0 moves into the gvisor netns.
+		NoExporter: true,
+	})
 	if err != nil {
-		slog.ErrorContext(ctx, "Failed to initialize tracing", slog.Any("err", err))
-		os.Exit(1)
+		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
-	defer func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			slog.Error("Failed to shutdown TracerProvider", slog.Any("err", err))
-		}
-	}()
+	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
 	// Create ateom dir
 	ateomDir := ateompath.AteomPath(*podNamespace, *podName)
@@ -92,6 +93,12 @@ func do(ctx context.Context) error {
 	// own exec.Cmd calls.
 	go reap.ReapChildren(nil, nil, nil, &reapLock)
 	slog.InfoContext(ctx, "Child process reaper launched")
+
+	// Validate before opening the socket so the operator sees a clear
+	// message rather than the kernel's cryptic "bind: invalid argument".
+	if err := ateompath.ValidateAteomSocketPath(*podNamespace, *podName); err != nil {
+		return err
+	}
 
 	// Clean up any old socket.
 	sockPath := ateompath.AteomSocketPath(*podNamespace, *podName)
@@ -128,7 +135,7 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while creating ateom-interior netns: %w", err)
 	}
 
-	actorLogger := NewActorLogger(logger, metadata.OnGCE())
+	actorLogger := ateom.NewActorLogger(syncedWriter, metadata.OnGCE())
 	ateomService := NewService(interiorNetNS, eth0LinkInfo, actorLogger)
 
 	svr := grpc.NewServer(
@@ -146,30 +153,6 @@ func do(ctx context.Context) error {
 	return nil
 }
 
-func initTracing(ctx context.Context) (*sdktrace.TracerProvider, error) {
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName("ateom-gvisor"),
-		),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %w", err)
-	}
-
-	// No exporter, since ateom has no network connectivity once eth0 is sent
-	// into the gvisor netns.  Maybe we can eventually figure out export via
-	// UDS.
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithResource(res),
-		// Only trace on-demand when signaled by the client (e.g. via --trace flag)
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())),
-	)
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
-
-	return tp, nil
-}
-
 // AteomService is a service for shepherding single microvm.
 type AteomService struct {
 	ateompb.UnimplementedAteomServer
@@ -180,13 +163,13 @@ type AteomService struct {
 
 	interiorNetNS netns.NsHandle
 	eth0LinkInfo  *SaveLinkInfo
-	actorLogger   *ActorLogger
+	actorLogger   *ateom.ActorLogger
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(interiorNetNS netns.NsHandle, eth0LinkInfo *SaveLinkInfo, actorLogger *ActorLogger) *AteomService {
+func NewService(interiorNetNS netns.NsHandle, eth0LinkInfo *SaveLinkInfo, actorLogger *ateom.ActorLogger) *AteomService {
 	svc := &AteomService{
 		interiorNetNS: interiorNetNS,
 		eth0LinkInfo:  eth0LinkInfo,
