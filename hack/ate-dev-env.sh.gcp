@@ -52,7 +52,7 @@ export BUCKET_NAME=snapshot-substrate-test-${PROJECT_ID}
 
 # Artifact Registry repository created by Terraform (hack/iac/artifactregistry.tf).
 # Cloud Build pushes images here; the cluster pulls from it.
-export AR_REPOSITORY_ID=substrate
+export AR_REPOSITORY_ID=ate-images
 export KO_DOCKER_REPO="${GCE_REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY_ID}"
 
 # Set this if you want to override the default build platforms
