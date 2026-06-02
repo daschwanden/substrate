@@ -104,3 +104,9 @@ variable "ar_repository_id" {
   type        = string
   default     = "substrate"
 }
+
+variable "filestore" {
+  description = "Flag to add Filestore implementation"
+  type        = bool
+  default     = false
+}

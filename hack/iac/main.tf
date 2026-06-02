@@ -46,6 +46,7 @@ resource "google_project_service" "services" {
     "cloudresourcemanager.googleapis.com",
     "cloudtrace.googleapis.com",
     "compute.googleapis.com",
+    "file.googleapis.com",
     "container.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
@@ -397,4 +398,31 @@ resource "google_artifact_registry_repository_iam_member" "cloudbuild_artifactre
   repository = google_artifact_registry_repository.ate_images.name
   role       = "roles/artifactregistry.writer"
   member     = google_project_service_identity.cloudbuild_agent.member
+}
+
+##########################################################################
+# Set up the Filestore cluster
+##########################################################################
+resource "google_filestore_instance" "filestore" {
+  count    = var.filestore ? 1 : 0
+  name     = "filestore"
+  location = var.zone
+  tier     = "BASIC_SSD"
+
+  file_shares {
+    capacity_gb = 2560
+    name        = "vol1"
+
+    nfs_export_options {
+      ip_ranges   = ["10.0.0.0/16", "10.2.0.0/16"]
+      access_mode = "READ_WRITE"
+      squash_mode = "NO_ROOT_SQUASH"
+    }
+  }
+
+  networks {
+    network      = google_compute_network.substrate.name
+    modes        = ["MODE_IPV4"]
+    connect_mode = "DIRECT_PEERING"
+  }
 }

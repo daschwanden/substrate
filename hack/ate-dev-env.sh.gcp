@@ -72,6 +72,7 @@ export TF_VAR_default_node_machine_type=${DEFAULT_NODE_MACHINE_TYPE}
 export TF_VAR_worker_node_machine_type=${GVISOR_NODE_MACHINE_TYPE}
 export TF_VAR_bucket_name=${BUCKET_NAME}
 export TF_VAR_ar_repository_id=${AR_REPOSITORY_ID}
+export TF_VAR_filestore=false
 
 # Networking CIDRs use the defaults in hack/iac/variables.tf. Uncomment and set
 # these to override them.
